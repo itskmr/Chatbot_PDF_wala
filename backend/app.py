@@ -44,7 +44,7 @@ except Exception as e:
 app = Flask(__name__)
 CORS(app)
 
-# New: Define namespaces
+# Define namespaces
 PRELOADED_NAMESPACE = "preloaded_pdfs"
 USER_NAMESPACE = ""  # Default namespace for user uploads
 
@@ -129,7 +129,7 @@ def get_chatbot_response(question, context_chunks):
     except Exception as e:
         return f"Error with OpenAI API: {str(e)}"
 
-# New: Function to pre-process and upload PDFs to Pinecone
+# Function to pre-process and upload PDFs to Pinecone
 def preload_pdfs():
     pdf_folder = "pdfs"
     if not os.path.exists(pdf_folder):
@@ -168,6 +168,15 @@ def preload_pdfs():
 
     stats = pinecone_index.describe_index_stats()
     print(f"Preloaded PDFs. Index stats: {stats}")
+
+# New endpoint to get list of preloaded PDFs
+@app.route("/pdfs", methods=["GET"])
+def get_pdfs():
+    pdf_folder = "pdfs"
+    if not os.path.exists(pdf_folder):
+        return jsonify({"pdfs": []})
+    pdf_files = [f for f in os.listdir(pdf_folder) if f.endswith('.pdf')]
+    return jsonify({"pdfs": pdf_files})
 
 @app.route("/upload", methods=["POST"])
 def upload_pdf():

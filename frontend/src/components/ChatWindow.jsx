@@ -1,10 +1,10 @@
 import React, { useRef, useEffect } from 'react';
 
-const ChatWindow = ({ messages, showWelcome }) => {
+const ChatWindow = ({ messages, statusMessage, showWelcome, conversationStarted }) => {
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   useEffect(() => {
@@ -13,7 +13,6 @@ const ChatWindow = ({ messages, showWelcome }) => {
 
   // Add emoji to bot responses occasionally
   const getBotResponse = (text) => {
-    // Simple example adding emoji - you can expand this
     if (text.toLowerCase().includes('great') || text.toLowerCase().includes('good')) {
       return (
         <>
@@ -26,23 +25,32 @@ const ChatWindow = ({ messages, showWelcome }) => {
 
   return (
     <div className={`flex-1 overflow-y-auto px-6 ${showWelcome ? 'pt-0' : 'pt-8'}`}>
+      {/* Display the status message at the top if conversation has started or welcome is not shown */}
+      {(conversationStarted || !showWelcome) && statusMessage && (
+        <div className="mb-8 max-w-3/4">
+          <div className="text-base text-red-500 font-medium mb-2">Gyansetu</div>
+          <div className="inline-block p-4 rounded-xl bg-white border-2 border-gray-200 text-gray-800 text-xl">
+            {getBotResponse(statusMessage)}
+          </div>
+        </div>
+      )}
       {messages.map((msg, index) => (
-        <div 
-          key={index} 
+        <div
+          key={index}
           className={`mb-8 max-w-3/4 ${
-            msg.type === 'user' 
-              ? 'ml-auto text-right' 
-              : ''
+            msg.type === 'user' ? 'ml-auto text-right' : ''
           }`}
         >
           {msg.type !== 'user' && (
             <div className="text-base text-red-500 font-medium mb-2">Gyansetu</div>
           )}
-          <div className={`inline-block p-4 rounded-xl ${
-            msg.type === 'user' 
-              ? 'bg-gray-100 text-gray-800 text-xl' 
-              : 'bg-white border-2 border-gray-200 text-gray-800 text-xl'
-          }`}>
+          <div
+            className={`inline-block p-4 rounded-xl ${
+              msg.type === 'user'
+                ? 'bg-gray-100 text-gray-800 text-xl'
+                : 'bg-white border-2 border-gray-200 text-gray-800 text-xl'
+            }`}
+          >
             {msg.type === 'user' ? msg.text : getBotResponse(msg.text)}
           </div>
           {msg.type !== 'user' && (
