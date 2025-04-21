@@ -23,20 +23,6 @@ const ChatInput = ({
     setIsSubmitting(true);
 
     try {
-      if (!pdfUploaded) {
-        setTimeout(() => {
-          setMessages((prev) => [
-            ...prev, 
-            { 
-              text: "You haven't uploaded a PDF yet. Please upload a PDF first, thank you!", 
-              type: 'bot' 
-            }
-          ]);
-          setIsSubmitting(false);
-        }, 700);
-        return;
-      }
-
       const response = await axios.post('http://localhost:5000/ask', { question });
       setMessages((prev) => [...prev, { text: response.data.answer, type: 'bot' }]);
     } catch (error) {
@@ -68,7 +54,7 @@ const ChatInput = ({
           console.log(`Upload progress: ${percentCompleted}%`);
         }
       });
-      toast.success(response.data.message);  // Show the success message from the backend
+      toast.success(response.data.message);
       setPdfUploaded(true);
       setUploadedFile(file.name);
     } catch (error) {
@@ -77,7 +63,7 @@ const ChatInput = ({
       console.error('Upload error:', errorMessage);
     } finally {
       setIsUploading(false);
-      fileInputRef.current.value = null;  // Reset the file input
+      fileInputRef.current.value = null;
     }
   };
 

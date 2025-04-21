@@ -1,4 +1,5 @@
 import os
+import glob
 from flask import Flask, request, jsonify
 import pdfplumber
 import openai
@@ -43,28 +44,30 @@ except Exception as e:
 app = Flask(__name__)
 CORS(app)
 
-def ensure_default_namespace():
-    """Ensure the default namespace exists by upserting a dummy vector if needed."""
+# New: Define namespaces
+PRELOADED_NAMESPACE = "preloaded_pdfs"
+USER_NAMESPACE = ""  # Default namespace for user uploads
+
+def ensure_namespace(namespace):
+    """Ensure a namespace exists by upserting a dummy vector if needed."""
     try:
-        # Check if the default namespace has any vectors
         stats = pinecone_index.describe_index_stats()
         namespaces = stats.get('namespaces', {})
-        if "" not in namespaces:
-            print("Default namespace not found. Creating by upserting a dummy vector...")
-            # Create a dummy vector with at least one non-zero value
+        if namespace not in namespaces:
+            print(f"Namespace {namespace} not found. Creating by upserting a dummy vector...")
             dummy_values = [0.0] * 1536
-            dummy_values[0] = 1.0  # Set the first value to 1.0 to satisfy Pinecone's requirement
+            dummy_values[0] = 1.0
             dummy_vector = {
                 "id": "dummy",
                 "values": dummy_values,
                 "metadata": {"text": "dummy"}
             }
-            pinecone_index.upsert(vectors=[dummy_vector], namespace="")
-            print("Default namespace created successfully.")
+            pinecone_index.upsert(vectors=[dummy_vector], namespace=namespace)
+            print(f"Namespace {namespace} created successfully.")
         else:
-            print(f"Default namespace exists with {namespaces['']['vector_count']} vectors.")
+            print(f"Namespace {namespace} exists with {namespaces[namespace]['vector_count']} vectors.")
     except Exception as e:
-        print(f"Error ensuring default namespace: {str(e)}")
+        print(f"Error ensuring namespace {namespace}: {str(e)}")
         raise
 
 def extract_text_from_pdf(pdf_path):
@@ -86,7 +89,7 @@ def extract_text_from_pdf(pdf_path):
             current_chunk = word + " "
     if current_chunk:
         chunks.append(current_chunk.strip())
-    print(f"Extracted {len(chunks)} chunks from PDF.")
+    print(f"Extracted {len(chunks)} chunks from PDF: {pdf_path}")
     return chunks
 
 def get_embedding(text):
@@ -96,14 +99,19 @@ def get_embedding(text):
     except Exception as e:
         raise Exception(f"Error generating embedding: {str(e)}")
 
-def search_knowledge_base(query):
+def search_knowledge_base(query, namespace=PRELOADED_NAMESPACE):
     try:
         query_embedding = get_embedding(query)
-        results = pinecone_index.query(vector=query_embedding, top_k=5, include_metadata=True, namespace="")
-        print(f"Queried Pinecone with query: {query}, found {len(results['matches'])} matches in default namespace.")
+        results = pinecone_index.query(
+            vector=query_embedding,
+            top_k=5,
+            include_metadata=True,
+            namespace=namespace
+        )
+        print(f"Queried Pinecone in namespace {namespace} with query: {query}, found {len(results['matches'])} matches.")
         return [result["metadata"]["text"] for result in results["matches"]]
     except Exception as e:
-        raise Exception(f"Error searching knowledge base: {str(e)}")
+        raise Exception(f"Error searching knowledge base in namespace {namespace}: {str(e)}")
 
 def get_chatbot_response(question, context_chunks):
     try:
@@ -121,6 +129,46 @@ def get_chatbot_response(question, context_chunks):
     except Exception as e:
         return f"Error with OpenAI API: {str(e)}"
 
+# New: Function to pre-process and upload PDFs to Pinecone
+def preload_pdfs():
+    pdf_folder = "pdfs"
+    if not os.path.exists(pdf_folder):
+        print(f"PDF folder {pdf_folder} does not exist. Creating it...")
+        os.makedirs(pdf_folder)
+        return
+
+    pdf_files = glob.glob(os.path.join(pdf_folder, "*.pdf"))
+    if not pdf_files:
+        print(f"No PDFs found in {pdf_folder}.")
+        return
+
+    ensure_namespace(PRELOADED_NAMESPACE)
+    pinecone_index.delete(delete_all=True, namespace=PRELOADED_NAMESPACE)
+    print(f"Cleared existing vectors in namespace {PRELOADED_NAMESPACE}.")
+
+    for pdf_path in pdf_files:
+        try:
+            chunks = extract_text_from_pdf(pdf_path)
+            vectors = []
+            for i, chunk in enumerate(chunks):
+                embedding = get_embedding(chunk)
+                vectors.append({
+                    "id": f"{os.path.basename(pdf_path).replace('.pdf', '')}_chunk_{i}",
+                    "values": embedding,
+                    "metadata": {"text": chunk, "source": os.path.basename(pdf_path)}
+                })
+
+            batch_size = 100
+            for i in range(0, len(vectors), batch_size):
+                batch = vectors[i:i + batch_size]
+                pinecone_index.upsert(vectors=batch, namespace=PRELOADED_NAMESPACE)
+                print(f"Upserted batch for {pdf_path}: {len(batch)} vectors.")
+        except Exception as e:
+            print(f"Error processing {pdf_path}: {str(e)}")
+
+    stats = pinecone_index.describe_index_stats()
+    print(f"Preloaded PDFs. Index stats: {stats}")
+
 @app.route("/upload", methods=["POST"])
 def upload_pdf():
     if 'pdf_file' not in request.files:
@@ -134,9 +182,7 @@ def upload_pdf():
     temp_filename = "temp_uploaded.pdf"
     file.save(temp_filename)
     try:
-        # Ensure the default namespace exists
-        ensure_default_namespace()
-
+        ensure_namespace(USER_NAMESPACE)
         chunks = extract_text_from_pdf(temp_filename)
         vectors = []
         for i, chunk in enumerate(chunks):
@@ -146,18 +192,15 @@ def upload_pdf():
                 "values": embedding,
                 "metadata": {"text": chunk}
             })
-        
-        # Check index stats
-        stats = pinecone_index.describe_index_stats()
-        print(f"Index stats before operation: {stats}")
-        
-        # Clear existing vectors in the default namespace
-        pinecone_index.delete(delete_all=True, namespace="")
-        print("Cleared existing vectors in default namespace.")
 
-        # Upsert vectors in the default namespace
-        pinecone_index.upsert(vectors=vectors, namespace="")
-        print(f"Upserted {len(vectors)} vectors to Pinecone in default namespace.")
+        pinecone_index.delete(delete_all=True, namespace=USER_NAMESPACE)
+        print(f"Cleared existing vectors in namespace {USER_NAMESPACE}.")
+
+        batch_size = 100
+        for i in range(0, len(vectors), batch_size):
+            batch = vectors[i:i + batch_size]
+            pinecone_index.upsert(vectors=batch, namespace=USER_NAMESPACE)
+            print(f"Upserted batch: {len(batch)} vectors.")
 
         os.remove(temp_filename)
         return jsonify({"message": f"PDF processed and {len(chunks)} chunks stored in Pinecone"})
@@ -172,13 +215,13 @@ def ask_question():
     question = data.get("question", "")
     if not question:
         return jsonify({"error": "Please provide a question"}), 400
-    
-    stats = pinecone_index.describe_index_stats()
-    if stats["total_vector_count"] == 0:
-        return jsonify({"error": "Please upload a PDF first"}), 400
-    
+
     try:
-        relevant_chunks = search_knowledge_base(question)
+        # Query preloaded PDFs first
+        relevant_chunks = search_knowledge_base(question, namespace=PRELOADED_NAMESPACE)
+        if not relevant_chunks:
+            # Optionally query user-uploaded PDFs
+            relevant_chunks = search_knowledge_base(question, namespace=USER_NAMESPACE)
         answer = get_chatbot_response(question, relevant_chunks)
         return jsonify({"answer": answer})
     except Exception as e:
@@ -189,4 +232,6 @@ def index():
     return jsonify({"message": "Welcome to the PDF Chatbot API"})
 
 if __name__ == "__main__":
+    # Preload PDFs when the application starts
+    preload_pdfs()
     app.run(debug=True)
